@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Contractor {
+  id               String    @id @default(cuid())
+  name             String
+  hourlyRate       Float
+  jobTitle         String
+  isActive         Boolean   @default(true)
+  startDate        String?
+  terminationDate  String?
+  paymentMethod    String    @default("Biweekly direct pay")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  payPeriods  PayPeriod[]
+  payHistory  PayHistory[]
+}
+
+model PayHistory {
+  id           String   @id @default(cuid())
+  contractorId String
+  type         String   // "raise" or "bonus"
+  date         String   // When it happened
+  amount       Float    // New hourly rate (for raises) or bonus amount (for bonuses)
+  previousRate Float?   // Previous hourly rate (for raises)
+  note         String?  // e.g. "upwork", "gusto", context
+  createdAt    DateTime @default(now())
+
+  contractor Contractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+}
+
+model ProjectCategory {
+  id              String @id @default(cuid())
+  name            String @unique // Display name: "BTC [Dev]", "BTC Events (#oneshot) [Dev]", etc.
+  clockifyProject String? // Clockify project name mapping: "behindthechair.com"
+  clockifyClient  String? // Clockify client mapping: "BTC"
+  sortOrder       Int     @default(0)
+  isDev           Boolean @default(true) // Dev vs Design category
+
+  timeEntries TimeEntry[]
+}
+
+model PayPeriod {
+  id             String   @id @default(cuid())
+  contractorId   String
+  startDate      DateTime
+  endDate        DateTime
+  processingDate DateTime // The date it gets processed (pay date)
+  month          String   // "January", "February", etc.
+  year           Int
+  totalHours     Float
+  totalAmount    Float
+  source         String   @default("clockify") // "clockify" or "manual"
+  createdAt      DateTime @default(now())
+
+  contractor  Contractor  @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  timeEntries TimeEntry[]
+}
+
+model TimeEntry {
+  id                String @id @default(cuid())
+  payPeriodId       String
+  projectCategoryId String
+  description       String?
+  hoursDecimal      Float
+  amount            Float
+
+  payPeriod       PayPeriod       @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
+  projectCategory ProjectCategory @relation(fields: [projectCategoryId], references: [id])
+}
