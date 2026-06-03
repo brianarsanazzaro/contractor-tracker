@@ -1,6 +1,6 @@
 "use client";
 
-import { ExportButtons } from "./export-buttons";
+import { useCallback } from "react";
 
 interface YearSummary {
   year: number;
@@ -27,54 +27,80 @@ export function DashboardExport({
 }: {
   summaries: YearSummary[];
 }) {
+  const exportExcel = useCallback(async () => {
+    const XLSX = await import("xlsx");
+
+    const headers = [
+      "Year",
+      "YTD Dev",
+      "YTD Design",
+      "YTD Total",
+      "Projected Dev",
+      "Projected Total",
+      "vs Prior Year",
+      "% Change",
+    ];
+
+    const rows: (string | number)[][] = summaries.map((s) => [
+      s.year,
+      fmt(s.dev),
+      fmt(s.design),
+      fmt(s.total),
+      s.isCurrentYear ? fmt(s.projectedDev) : "N/A",
+      s.isCurrentYear ? fmt(s.projectedTotal) : "N/A",
+      s.totalVsPrior
+        ? `${fmt(Math.abs(s.totalVsPrior.amount))} ${s.totalVsPrior.direction === "down" ? "under" : "over"}`
+        : "N/A",
+      s.totalVsPrior
+        ? `${s.totalVsPrior.percent.toFixed(2)}% ${s.totalVsPrior.direction === "down" ? "less" : "more"}`
+        : "N/A",
+    ]);
+
+    for (const s of summaries) {
+      rows.push([]);
+      rows.push([`--- ${s.year} Category Breakdown ---`, "", "", "", "", "", "", ""]);
+      const entries = Object.entries(s.byCategory)
+        .filter(([, amt]) => amt > 0)
+        .sort(([, a], [, b]) => b - a);
+      for (const [cat, amt] of entries) {
+        const pct = s.total > 0 ? ((amt / s.total) * 100).toFixed(1) + "%" : "0%";
+        rows.push([s.year, cat, fmt(amt), pct, "", "", "", ""]);
+      }
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const colWidths = headers.map((h, i) => {
+      const maxLen = Math.max(
+        h.length,
+        ...rows.map((r) => String(r[i] ?? "").length)
+      );
+      return { wch: Math.min(maxLen + 2, 40) };
+    });
+    ws["!cols"] = colWidths;
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dashboard");
+    XLSX.writeFile(wb, "Dashboard - Year Comparisons.xlsx");
+  }, [summaries]);
+
+  const exportPdf = useCallback(() => {
+    window.print();
+  }, []);
+
   return (
-    <ExportButtons
-      getData={() => {
-        const headers = [
-          "Year",
-          "YTD Dev",
-          "YTD Design",
-          "YTD Total",
-          "Projected Dev",
-          "Projected Total",
-          "vs Prior Year",
-          "% Change",
-        ];
-
-        const rows = summaries.map((s) => [
-          s.year,
-          fmt(s.dev),
-          fmt(s.design),
-          fmt(s.total),
-          s.isCurrentYear ? fmt(s.projectedDev) : "N/A",
-          s.isCurrentYear ? fmt(s.projectedTotal) : "N/A",
-          s.totalVsPrior
-            ? `${fmt(Math.abs(s.totalVsPrior.amount))} ${s.totalVsPrior.direction === "down" ? "under" : "over"}`
-            : "N/A",
-          s.totalVsPrior
-            ? `${s.totalVsPrior.percent.toFixed(2)}% ${s.totalVsPrior.direction === "down" ? "less" : "more"}`
-            : "N/A",
-        ]);
-
-        // Add blank row then category breakdowns per year
-        for (const s of summaries) {
-          rows.push([] as unknown as (string | number)[]);
-          rows.push([`--- ${s.year} Category Breakdown ---`, "", "", "", "", "", "", ""]);
-          const entries = Object.entries(s.byCategory)
-            .filter(([, amt]) => amt > 0)
-            .sort(([, a], [, b]) => b - a);
-          for (const [cat, amt] of entries) {
-            const pct = s.total > 0 ? ((amt / s.total) * 100).toFixed(1) + "%" : "0%";
-            rows.push([s.year, cat, fmt(amt), pct, "", "", "", ""]);
-          }
-        }
-
-        return {
-          title: "Dashboard - Year Comparisons",
-          headers,
-          rows,
-        };
-      }}
-    />
+    <div className="flex gap-2 print:hidden">
+      <button
+        onClick={exportExcel}
+        className="px-3 py-1.5 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700"
+      >
+        Export Excel
+      </button>
+      <button
+        onClick={exportPdf}
+        className="px-3 py-1.5 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700"
+      >
+        Export PDF
+      </button>
+    </div>
   );
 }

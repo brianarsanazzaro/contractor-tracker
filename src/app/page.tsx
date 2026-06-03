@@ -47,12 +47,12 @@ export default async function DashboardPage() {
     <div className="max-w-5xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <DashboardExport summaries={summaries} />
+        <DashboardExport summaries={reversed} />
       </div>
 
       <div className="space-y-8">
         {reversed.map((s) => (
-          <div key={s.year}>
+          <div key={s.year} className="print-year">
             {/* Year header */}
             <div className="flex items-center gap-3 mb-4">
               <h2 className="text-xl font-bold text-gray-900">{s.year}</h2>

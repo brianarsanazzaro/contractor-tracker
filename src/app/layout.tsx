@@ -35,7 +35,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col bg-gray-50">
         {isAuthenticated ? (
           <>
-            <nav className="bg-white border-b border-gray-200 px-6 py-3">
+            <nav className="bg-white border-b border-gray-200 px-6 py-3 print:hidden">
               <div className="flex items-center gap-8">
                 <Link href="/" className="text-lg font-bold text-gray-900">
                   Contractor Tracker
