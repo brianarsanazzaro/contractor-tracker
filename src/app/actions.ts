@@ -1,5 +1,6 @@
 "use server";
 
+import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { parseClockifyCsv } from "@/lib/parse-clockify";
 import {
@@ -31,6 +32,7 @@ async function getRateAtDate(contractorId: string, date: Date): Promise<number> 
 }
 
 export async function getContractors(includeInactive = false) {
+  await requireUser();
   return prisma.contractor.findMany({
     where: includeInactive ? {} : { isActive: true },
     orderBy: { name: "asc" },
@@ -38,6 +40,7 @@ export async function getContractors(includeInactive = false) {
 }
 
 export async function getAllContractors() {
+  await requireUser();
   return prisma.contractor.findMany({
     orderBy: { name: "asc" },
     include: {
@@ -47,6 +50,7 @@ export async function getAllContractors() {
 }
 
 export async function getProjectCategories() {
+  await requireUser();
   return prisma.projectCategory.findMany({ orderBy: { sortOrder: "asc" } });
 }
 
@@ -79,6 +83,7 @@ function computeRateAtDate(
 }
 
 export async function getDashboardData(year: number) {
+  await requireUser();
   const categories = await prisma.projectCategory.findMany({
     orderBy: { sortOrder: "asc" },
   });
@@ -193,6 +198,7 @@ export async function getDashboardData(year: number) {
 }
 
 export async function uploadClockifyCsv(formData: FormData) {
+  await requireUser();
   const file = formData.get("file") as File;
   const contractorId = formData.get("contractorId") as string;
   const startDate = formData.get("startDate") as string;
@@ -288,6 +294,7 @@ export async function uploadClockifyCsv(formData: FormData) {
 }
 
 export async function addManualEntry(formData: FormData) {
+  await requireUser();
   const contractorId = formData.get("contractorId") as string;
   const projectCategoryId = formData.get("projectCategoryId") as string;
   const startDate = formData.get("startDate") as string;
@@ -349,11 +356,13 @@ export async function addManualEntry(formData: FormData) {
 
 // Get the rate for a contractor at a given date (for client-side preview)
 export async function getContractorRateAtDate(contractorId: string, dateStr: string) {
+  await requireUser();
   const rate = await getRateAtDate(contractorId, new Date(dateStr));
   return rate;
 }
 
 export async function addContractor(formData: FormData) {
+  await requireUser();
   const name = formData.get("name") as string;
   const hourlyRate = parseFloat(formData.get("hourlyRate") as string);
   const jobTitle = formData.get("jobTitle") as string;
@@ -370,6 +379,7 @@ export async function addContractor(formData: FormData) {
 }
 
 export async function getYearSummaries() {
+  await requireUser();
   const categories = await prisma.projectCategory.findMany({
     orderBy: { sortOrder: "asc" },
   });
@@ -508,6 +518,7 @@ export async function getYearSummaries() {
 }
 
 export async function getMonthlySpend(year: number) {
+  await requireUser();
   const payPeriods = await prisma.payPeriod.findMany({
     where: { processingDate: { gte: new Date(year, 0, 1), lt: new Date(year + 1, 0, 1) } },
     select: { processingDate: true, totalAmount: true },
@@ -553,6 +564,7 @@ export async function getMonthlySpend(year: number) {
 }
 
 export async function getDuplicatePayPeriods(year: number) {
+  await requireUser();
   const payPeriods = await prisma.payPeriod.findMany({
     where: { year },
     include: { contractor: { select: { name: true } } },
@@ -619,6 +631,13 @@ export async function getDuplicatePayPeriods(year: number) {
 }
 
 export async function getMissingPayPeriods(year: number) {
+  await requireUser();
+  // An invalid year would make every date below Invalid Date, and Invalid
+  // Date comparisons are all false — the generation loop would never break
+  if (!Number.isFinite(year)) {
+    return { periods: [], activeContractorCount: 0 };
+  }
+
   // Pay periods are Wed-Tue, paid on Wednesday
   // Generate all completed pay periods for the year up to now
   const now = new Date();
@@ -648,7 +667,9 @@ export async function getMissingPayPeriods(year: number) {
 
   const periods: { start: Date; end: Date; payDate: Date }[] = [];
 
-  while (true) {
+  // A year holds at most 27 biweekly periods; the cap is a backstop so bad
+  // input can never spin this loop forever
+  for (let i = 0; i < 40; i++) {
     const periodEnd = new Date(periodStart);
     periodEnd.setDate(periodEnd.getDate() + 13); // Tue, 2 weeks later
 
@@ -758,6 +779,7 @@ export async function getMissingPayPeriods(year: number) {
 }
 
 export async function terminateContractor(id: string) {
+  await requireUser();
   const today = new Date().toLocaleDateString("en-US");
   await prisma.contractor.update({
     where: { id },
@@ -767,11 +789,13 @@ export async function terminateContractor(id: string) {
 }
 
 export async function deletePayPeriod(id: string) {
+  await requireUser();
   await prisma.payPeriod.delete({ where: { id } });
   return { success: true };
 }
 
 export async function bulkDeletePayPeriods(ids: string[]) {
+  await requireUser();
   await prisma.timeEntry.deleteMany({
     where: { payPeriodId: { in: ids } },
   });
@@ -782,6 +806,7 @@ export async function bulkDeletePayPeriods(ids: string[]) {
 }
 
 export async function getPayPeriodList(year: number) {
+  await requireUser();
   const periods = await prisma.payPeriod.findMany({
     where: { year },
     include: {
@@ -816,6 +841,7 @@ export interface SheetImportResult {
 export async function importGoogleSheetCsv(
   formData: FormData
 ): Promise<SheetImportResult> {
+  await requireUser();
   const file = formData.get("file") as File;
   const format = formData.get("format") as SheetFormat;
   const clearExisting = formData.get("clearExisting") === "true";

@@ -12,7 +12,10 @@ export default async function HoursPage({
   searchParams: Promise<{ year?: string }>;
 }) {
   const params = await searchParams;
-  const year = parseInt(params.year || String(new Date().getFullYear()));
+  const parsedYear = parseInt(params.year || "", 10);
+  const year = Number.isFinite(parsedYear)
+    ? parsedYear
+    : new Date().getFullYear();
   const [data, missingData, duplicates] = await Promise.all([
     getDashboardData(year),
     getMissingPayPeriods(year),

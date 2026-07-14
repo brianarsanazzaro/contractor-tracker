@@ -7,6 +7,18 @@ datasource db {
   provider = "sqlite"
 }
 
+// People allowed to sign in. The admin email in src/lib/auth.ts is always
+// allowed and is not stored here, so the allowlist can never be locked out.
+model AllowedUser {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String?   // Filled in from Google on first sign-in
+  role        String    @default("user") // "user" or "admin"
+  addedBy     String    // Email of the admin who added them
+  createdAt   DateTime  @default(now())
+  lastLoginAt DateTime?
+}
+
 model Contractor {
   id               String    @id @default(cuid())
   name             String
@@ -19,8 +31,33 @@ model Contractor {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  payPeriods  PayPeriod[]
-  payHistory  PayHistory[]
+  payPeriods    PayPeriod[]
+  payHistory    PayHistory[]
+  accountAccess AccountAccess[]
+}
+
+model SharedAccount {
+  id        String   @id @default(cuid())
+  name      String   @unique // "WordPress admin", "Mailchimp", etc.
+  username  String?  // Login email/username for the account
+  url       String?  // Where to log in
+  note      String?
+  createdAt DateTime @default(now())
+
+  access AccountAccess[]
+}
+
+model AccountAccess {
+  id           String   @id @default(cuid())
+  accountId    String
+  contractorId String
+  grantedDate  String   // "YYYY-MM-DD" — when credentials were shared
+  revokedDate  String?  // Set once access is removed / password rotated
+  note         String?
+  createdAt    DateTime @default(now())
+
+  account    SharedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  contractor Contractor    @relation(fields: [contractorId], references: [id], onDelete: Cascade)
 }
 
 model PayHistory {
