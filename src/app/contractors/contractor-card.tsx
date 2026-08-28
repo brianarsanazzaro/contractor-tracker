@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { terminateContractor } from "../actions";
+import {
+  terminateContractor,
+  setContractorPayee,
+  setContractorDetails,
+} from "../actions";
 
 interface PayHistoryItem {
   id: string;
@@ -10,6 +14,11 @@ interface PayHistoryItem {
   amount: number;
   previousRate: number | null;
   note: string | null;
+}
+
+export interface PayeeOption {
+  id: string;
+  name: string;
 }
 
 interface ContractorData {
@@ -21,6 +30,141 @@ interface ContractorData {
   startDate: string | null;
   terminationDate: string | null;
   payHistory: PayHistoryItem[];
+  paidToId: string | null;
+  paidToStartDate: string | null;
+  paidToNote: string | null;
+  paidTo: PayeeOption | null;
+  personalEmail: string | null;
+  workEmail: string | null;
+  workPassword: string | null;
+  hasCompanyCard: boolean;
+  companyCardNote: string | null;
+  paidFor: { id: string; name: string; isActive: boolean }[];
+}
+
+// Editor for who actually receives this contractor's money. Hours and rate
+// always stay on the contractor's own record — only the payment moves.
+function PayeeControl({
+  contractor,
+  payeeOptions,
+}: {
+  contractor: ContractorData;
+  payeeOptions: PayeeOption[];
+}) {
+  const c = contractor;
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Someone who receives pay for others can't be routed away themselves.
+  const receivesForOthers = c.paidFor.length > 0;
+  const options = payeeOptions.filter((o) => o.id !== c.id);
+
+  async function handleSave(formData: FormData) {
+    setSaving(true);
+    setError(null);
+    const result = await setContractorPayee(formData);
+    setSaving(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    window.location.reload();
+  }
+
+  if (editing) {
+    return (
+      <form action={handleSave} className="mt-3 border-t border-gray-100 pt-3">
+        <input type="hidden" name="contractorId" value={c.id} />
+        <div className="text-xs font-semibold text-gray-500 mb-2">
+          Payment routing
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <select
+            name="paidToId"
+            defaultValue={c.paidToId || ""}
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+          >
+            <option value="">Paid directly (own name)</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id}>
+                Paid via {o.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            name="paidToStartDate"
+            defaultValue={c.paidToStartDate || ""}
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+            title="When this arrangement began"
+          />
+          <input
+            type="text"
+            name="paidToNote"
+            defaultValue={c.paidToNote || ""}
+            placeholder="Note for accounting"
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+          />
+        </div>
+        {error && (
+          <div className="mt-2 text-xs text-red-600">{error}</div>
+        )}
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="text-xs px-2.5 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setError(null);
+            }}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-3 flex items-start justify-between gap-3">
+      <div className="text-xs">
+        {c.paidTo ? (
+          <>
+            <span className="inline-block px-2 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
+              Paid via {c.paidTo.name}
+            </span>
+            <span className="text-gray-400 ml-2">
+              {c.paidToStartDate ? `since ${c.paidToStartDate}` : ""}
+              {c.paidToNote ? ` · ${c.paidToNote}` : ""}
+            </span>
+          </>
+        ) : receivesForOthers ? (
+          <span className="inline-block px-2 py-0.5 rounded bg-purple-50 text-purple-600 font-medium">
+            Receives payment for:{" "}
+            {c.paidFor.map((p) => p.name).join(", ")}
+          </span>
+        ) : (
+          <span className="text-gray-400">Paid directly under own name</span>
+        )}
+      </div>
+      {!receivesForOthers && (
+        <button
+          onClick={() => setEditing(true)}
+          className="text-xs text-gray-400 hover:text-blue-600 whitespace-nowrap"
+        >
+          {c.paidTo ? "Change" : "Route pay"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function computeDuration(startDateStr: string): string {
@@ -50,7 +194,278 @@ function computeDuration(startDateStr: string): string {
   return parts.join(" ") || "< 1 month";
 }
 
-export function ContractorCard({ contractor }: { contractor: ContractorData }) {
+// Emails, work-account credentials and company-card status. The password is
+// masked until the user asks to see it — it is stored in plain text.
+function DetailsControl({ contractor }: { contractor: ContractorData }) {
+  const c = contractor;
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [hasCard, setHasCard] = useState(c.hasCompanyCard);
+
+  async function handleSave(formData: FormData) {
+    setSaving(true);
+    setError(null);
+    const result = await setContractorDetails(formData);
+    setSaving(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    window.location.reload();
+  }
+
+  if (editing) {
+    return (
+      <form action={handleSave} className="mt-3 border-t border-gray-100 pt-3">
+        <input type="hidden" name="contractorId" value={c.id} />
+        <div className="text-xs font-semibold text-gray-500 mb-2">
+          Contact &amp; accounts
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <input
+            type="email"
+            name="personalEmail"
+            defaultValue={c.personalEmail || ""}
+            placeholder="Personal email"
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+          />
+          <input
+            type="email"
+            name="workEmail"
+            defaultValue={c.workEmail || ""}
+            placeholder="Contractor email"
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+          />
+          <input
+            type="text"
+            name="workPassword"
+            defaultValue={c.workPassword || ""}
+            placeholder="Contractor password (if known)"
+            autoComplete="off"
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm"
+          />
+        </div>
+        <div className="mt-2 flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              name="hasCompanyCard"
+              defaultChecked={c.hasCompanyCard}
+              onChange={(e) => setHasCard(e.target.checked)}
+            />
+            Has a company card
+          </label>
+          {hasCard && (
+            <input
+              type="text"
+              name="companyCardNote"
+              defaultValue={c.companyCardNote || ""}
+              placeholder="Card note (last 4, issued, limit...)"
+              className="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm"
+            />
+          )}
+        </div>
+        {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="text-xs px-2.5 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setError(null);
+              setHasCard(c.hasCompanyCard);
+            }}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  const nothingRecorded =
+    !c.personalEmail && !c.workEmail && !c.workPassword && !c.hasCompanyCard;
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-3 flex items-start justify-between gap-3">
+      <div className="text-xs space-y-1 min-w-0">
+        {nothingRecorded ? (
+          <span className="text-gray-400">No contact details on file</span>
+        ) : (
+          <>
+            {c.personalEmail && (
+              <div className="text-gray-500">
+                <span className="text-gray-400">Personal:</span>{" "}
+                <span className="font-medium text-gray-700">
+                  {c.personalEmail}
+                </span>
+              </div>
+            )}
+            {c.workEmail && (
+              <div className="text-gray-500">
+                <span className="text-gray-400">Contractor:</span>{" "}
+                <span className="font-medium text-gray-700">{c.workEmail}</span>
+                {c.workPassword && (
+                  <>
+                    <span className="text-gray-300 mx-1.5">·</span>
+                    <span className="font-mono text-gray-600">
+                      {showPassword ? c.workPassword : "••••••••"}
+                    </span>
+                    <button
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="ml-1.5 text-gray-400 hover:text-blue-600"
+                    >
+                      {showPassword ? "hide" : "show"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {!c.workEmail && c.workPassword && (
+              <div className="text-gray-500">
+                <span className="text-gray-400">Password:</span>{" "}
+                <span className="font-mono text-gray-600">
+                  {showPassword ? c.workPassword : "••••••••"}
+                </span>
+                <button
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="ml-1.5 text-gray-400 hover:text-blue-600"
+                >
+                  {showPassword ? "hide" : "show"}
+                </button>
+              </div>
+            )}
+            {c.hasCompanyCard && (
+              <div>
+                <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 font-medium">
+                  Company card
+                </span>
+                {c.companyCardNote && (
+                  <span className="text-gray-400 ml-2">
+                    {c.companyCardNote}
+                  </span>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <button
+        onClick={() => setEditing(true)}
+        className="text-xs text-gray-400 hover:text-blue-600 whitespace-nowrap"
+      >
+        {nothingRecorded ? "Add details" : "Edit details"}
+      </button>
+    </div>
+  );
+}
+
+// A person whose pay is routed through this contractor, shown as a line item
+// on the payee's card instead of getting a card of its own.
+function RoutedContractorRow({
+  contractor,
+  payeeOptions,
+}: {
+  contractor: ContractorData;
+  payeeOptions: PayeeOption[];
+}) {
+  const c = contractor;
+  const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+
+  async function handleTerminate() {
+    await terminateContractor(c.id);
+    window.location.reload();
+  }
+
+  return (
+    <div className="py-2 pl-3 border-l-2 border-purple-100">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-medium text-gray-800">{c.name}</span>
+            <span className="text-xs text-gray-400 truncate">{c.jobTitle}</span>
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            {c.startDate ? `Started ${c.startDate}` : ""}
+            {c.paidToStartDate ? ` · routed since ${c.paidToStartDate}` : ""}
+            {c.paidToNote ? ` · ${c.paidToNote}` : ""}
+          </div>
+        </div>
+        <div className="flex items-center gap-3 whitespace-nowrap">
+          <span className="text-sm font-semibold text-gray-700">
+            ${c.hourlyRate.toFixed(2)}
+            <span className="text-xs font-normal text-gray-400">/hr</span>
+          </span>
+          {c.hasCompanyCard && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+              Card
+            </span>
+          )}
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            className="text-xs text-gray-400 hover:text-blue-600"
+          >
+            Details
+          </button>
+          <button
+            onClick={() => setEditing((v) => !v)}
+            className="text-xs text-gray-400 hover:text-blue-600"
+          >
+            {editing ? "Close" : "Routing"}
+          </button>
+          {!confirming ? (
+            <button
+              onClick={() => setConfirming(true)}
+              className="text-xs text-gray-400 hover:text-red-500"
+            >
+              Terminate
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleTerminate}
+                className="text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setConfirming(false)}
+                className="text-xs text-gray-400 hover:text-gray-600"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {showDetails && <DetailsControl contractor={c} />}
+      {editing && (
+        <PayeeControl contractor={c} payeeOptions={payeeOptions} />
+      )}
+    </div>
+  );
+}
+
+export function ContractorCard({
+  contractor,
+  payeeOptions,
+  routedContractors = [],
+}: {
+  contractor: ContractorData;
+  payeeOptions: PayeeOption[];
+  routedContractors?: ContractorData[];
+}) {
   const c = contractor;
   const raises = c.payHistory.filter((h) => h.type === "raise");
   const bonuses = c.payHistory.filter((h) => h.type === "bonus");
@@ -82,6 +497,16 @@ export function ContractorCard({ contractor }: { contractor: ContractorData }) {
             <span className="inline-block px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
               Active
             </span>
+            {c.paidTo && (
+              <span className="inline-block px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700">
+                Paid via {c.paidTo.name}
+              </span>
+            )}
+            {c.hasCompanyCard && (
+              <span className="inline-block px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">
+                Company card
+              </span>
+            )}
           </div>
           <p className="text-sm text-gray-500">{c.jobTitle}</p>
           {c.startDate && (
@@ -178,6 +603,27 @@ export function ContractorCard({ contractor }: { contractor: ContractorData }) {
           </div>
         </div>
       )}
+
+      <DetailsControl contractor={c} />
+
+      <PayeeControl contractor={c} payeeOptions={payeeOptions} />
+
+      {routedContractors.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3">
+          <div className="text-xs font-semibold text-gray-500 mb-1">
+            Paid through {c.name}
+          </div>
+          <div className="divide-y divide-gray-100">
+            {routedContractors.map((r) => (
+              <RoutedContractorRow
+                key={r.id}
+                contractor={r}
+                payeeOptions={payeeOptions}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -206,6 +652,11 @@ export function InactiveContractorCard({
             <span className="inline-block px-2 py-0.5 rounded text-xs bg-red-100 text-red-600">
               Terminated {c.terminationDate || ""}
             </span>
+            {c.paidTo && (
+              <span className="inline-block px-2 py-0.5 rounded text-xs bg-purple-50 text-purple-500">
+                Was paid via {c.paidTo.name}
+              </span>
+            )}
           </div>
           <p className="text-sm text-gray-400">{c.jobTitle}</p>
           {c.startDate && (

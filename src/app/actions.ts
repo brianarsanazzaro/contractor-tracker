@@ -45,6 +45,11 @@ export async function getAllContractors() {
     orderBy: { name: "asc" },
     include: {
       payHistory: { orderBy: { date: "asc" } },
+      paidTo: { select: { id: true, name: true } },
+      paidFor: {
+        select: { id: true, name: true, isActive: true },
+        orderBy: { name: "asc" },
+      },
     },
   });
 }
@@ -61,6 +66,21 @@ function localDate(d: Date | string, opts?: Intl.DateTimeFormatOptions): string 
   if (!match) return new Date(d).toLocaleDateString("en-US", opts);
   const local = new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
   return local.toLocaleDateString("en-US", opts || undefined);
+}
+
+// Contractor startDate/terminationDate are free-form strings typed by hand:
+// "April 16, 2024", "Sept 23, 2024", "Feb 2025", "2/6/2026", "2026-08-27".
+// Date() handles all of these except a bare ISO date, which it reads as UTC and
+// can land a day early west of Greenwich. Returns null for blank/unparseable.
+function parseLooseDate(value: string | null | undefined): Date | null {
+  const s = (value || "").trim();
+  if (!s) return null;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    return new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]));
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 // Pure function: compute rate at a date from a list of raises
@@ -367,12 +387,118 @@ export async function addContractor(formData: FormData) {
   const hourlyRate = parseFloat(formData.get("hourlyRate") as string);
   const jobTitle = formData.get("jobTitle") as string;
 
+  const paidToId = (formData.get("paidToId") as string) || null;
+
   if (!name || !hourlyRate || !jobTitle) {
     return { error: "All fields are required" };
   }
 
+  const hasCompanyCard = formData.get("hasCompanyCard") === "on";
+  const optional = (key: string) => {
+    const v = (formData.get(key) as string | null)?.trim();
+    return v ? v : null;
+  };
+
   await prisma.contractor.create({
-    data: { name, hourlyRate, jobTitle },
+    data: {
+      name,
+      hourlyRate,
+      jobTitle,
+      personalEmail: optional("personalEmail"),
+      workEmail: optional("workEmail"),
+      workPassword: optional("workPassword"),
+      hasCompanyCard,
+      companyCardNote: hasCompanyCard ? optional("companyCardNote") : null,
+      paidToId,
+      paidToStartDate: paidToId
+        ? ((formData.get("paidToStartDate") as string) || null)
+        : null,
+      paidToNote: paidToId
+        ? ((formData.get("paidToNote") as string) || null)
+        : null,
+    },
+  });
+
+  return { success: true };
+}
+
+// Contact details, work account credentials and company-card status. The work
+// password is stored as plain text because it has to be readable back.
+export async function setContractorDetails(formData: FormData) {
+  await requireUser();
+  const contractorId = formData.get("contractorId") as string;
+  if (!contractorId) return { error: "Missing contractor" };
+
+  const str = (key: string) => {
+    const v = (formData.get(key) as string | null)?.trim();
+    return v ? v : null;
+  };
+
+  const hasCompanyCard = formData.get("hasCompanyCard") === "on";
+
+  await prisma.contractor.update({
+    where: { id: contractorId },
+    data: {
+      personalEmail: str("personalEmail"),
+      workEmail: str("workEmail"),
+      workPassword: str("workPassword"),
+      hasCompanyCard,
+      companyCardNote: hasCompanyCard ? str("companyCardNote") : null,
+    },
+  });
+
+  return { success: true };
+}
+
+// Route a contractor's pay to someone else (or clear the routing). The
+// contractor keeps their own hours, rate and timesheets either way.
+export async function setContractorPayee(formData: FormData) {
+  await requireUser();
+  const contractorId = formData.get("contractorId") as string;
+  const paidToId = (formData.get("paidToId") as string) || null;
+  const paidToStartDate = (formData.get("paidToStartDate") as string) || null;
+  const paidToNote = (formData.get("paidToNote") as string) || null;
+
+  if (!contractorId) return { error: "Missing contractor" };
+  if (paidToId === contractorId) {
+    return { error: "A contractor cannot be paid to themselves" };
+  }
+
+  // Payment routing is one hop only: if the chosen payee is themselves routed
+  // elsewhere, the money would have two destinations and the totals stop
+  // reconciling. Reject it rather than silently following the chain.
+  if (paidToId) {
+    const payee = await prisma.contractor.findUnique({
+      where: { id: paidToId },
+      select: { name: true, paidToId: true },
+    });
+    if (!payee) return { error: "Payee not found" };
+    if (payee.paidToId) {
+      return {
+        error: `${payee.name} is already paid under someone else's name. Pick a payee who is paid directly.`,
+      };
+    }
+  }
+
+  // Likewise, someone who receives pay for others cannot be routed away.
+  if (paidToId) {
+    const dependents = await prisma.contractor.count({
+      where: { paidToId: contractorId },
+    });
+    if (dependents > 0) {
+      return {
+        error: "This contractor receives pay for others, so their own pay cannot be routed elsewhere.",
+      };
+    }
+  }
+
+  await prisma.contractor.update({
+    where: { id: contractorId },
+    data: {
+      paidToId,
+      paidToStartDate: paidToId ? paidToStartDate : null,
+      paidToNote: paidToId ? paidToNote : null,
+    },
   });
 
   return { success: true };
@@ -517,42 +643,57 @@ export async function getYearSummaries() {
   return { summaries: comparisons, categories };
 }
 
+const MONTH_ORDER = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function ymd(d: Date | string): string {
+  const s = typeof d === "string" ? d : d.toISOString();
+  return s.slice(0, 10);
+}
+
+// Spend is reported on an accrual basis: a pay period's money is spread evenly
+// across the days it covers, not dumped on its processing date. A Clockify
+// report that spans several months would otherwise land entirely in the month
+// it happened to be processed in, emptying the months it actually covers.
 export async function getMonthlySpend(year: number) {
   await requireUser();
   const payPeriods = await prisma.payPeriod.findMany({
-    where: { processingDate: { gte: new Date(year, 0, 1), lt: new Date(year + 1, 0, 1) } },
-    select: { processingDate: true, totalAmount: true },
+    select: { startDate: true, endDate: true, totalAmount: true },
   });
 
-  const monthOrder = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
-
   const totals = new Map<string, number>();
-  for (const m of monthOrder) totals.set(m, 0);
+  for (const m of MONTH_ORDER) totals.set(m, 0);
+
   for (const p of payPeriods) {
-    const procStr = typeof p.processingDate === "string"
-      ? p.processingDate
-      : p.processingDate.toISOString();
-    const match = procStr.match(/(\d{4})-(\d{2})-\d{2}/);
-    if (!match) continue;
-    const monthIdx = parseInt(match[2]) - 1;
-    const monthName = monthOrder[monthIdx];
-    totals.set(monthName, (totals.get(monthName) || 0) + p.totalAmount);
+    const start = new Date(`${ymd(p.startDate)}T00:00:00Z`);
+    const end = new Date(`${ymd(p.endDate)}T00:00:00Z`);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) continue;
+
+    const dayMs = 86400000;
+    const days = Math.floor((end.getTime() - start.getTime()) / dayMs) + 1;
+    const perDay = p.totalAmount / days;
+
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start.getTime() + i * dayMs);
+      if (d.getUTCFullYear() !== year) continue;
+      const monthName = MONTH_ORDER[d.getUTCMonth()];
+      totals.set(monthName, (totals.get(monthName) || 0) + perDay);
+    }
   }
 
-  const months = monthOrder.map((m) => ({
+  const months = MONTH_ORDER.map((m) => ({
     month: m,
     total: Math.round((totals.get(m) || 0) * 100) / 100,
   }));
@@ -710,7 +851,7 @@ export async function getMissingPayPeriods(year: number) {
   // Get active contractors
   const activeContractors = await prisma.contractor.findMany({
     where: { isActive: true },
-    select: { id: true, name: true },
+    select: { id: true, name: true, startDate: true, terminationDate: true },
   });
 
   // A biweekly window is "covered" for a contractor if ANY uploaded pay period
@@ -729,6 +870,15 @@ export async function getMissingPayPeriods(year: number) {
     const missingContractors: string[] = [];
 
     for (const contractor of activeContractors) {
+      // Don't flag a period the contractor wasn't working for. Without this,
+      // anyone who joined mid-year looks like they are missing every earlier
+      // period of the year. An unparseable/blank date means "no bound known",
+      // so the period still gets checked.
+      const started = parseLooseDate(contractor.startDate);
+      if (started && started.getTime() > windowEnd) continue;
+      const terminated = parseLooseDate(contractor.terminationDate);
+      if (terminated && terminated.getTime() < windowStart) continue;
+
       const hasRecord = existingPeriods.some((ep) => {
         if (ep.contractorId !== contractor.id) return false;
 
@@ -810,7 +960,9 @@ export async function getPayPeriodList(year: number) {
   const periods = await prisma.payPeriod.findMany({
     where: { year },
     include: {
-      contractor: { select: { name: true } },
+      contractor: {
+        select: { name: true, paidTo: { select: { name: true } } },
+      },
     },
     orderBy: [{ processingDate: "desc" }, { contractor: { name: "asc" } }],
   });
@@ -818,6 +970,7 @@ export async function getPayPeriodList(year: number) {
   return periods.map((p) => ({
     id: p.id,
     contractorName: p.contractor.name,
+    paidToName: p.contractor.paidTo?.name ?? null,
     startDate: localDate(p.startDate, { month: "short", day: "numeric", year: "numeric" }),
     endDate: localDate(p.endDate, { month: "short", day: "numeric", year: "numeric" }),
     processingDate: localDate(p.processingDate, { month: "short", day: "numeric", year: "numeric" }),
@@ -825,6 +978,104 @@ export async function getPayPeriodList(year: number) {
     hours: p.totalHours,
     source: p.source,
   }));
+}
+
+export interface PayrollLine {
+  payPeriodId: string;
+  contractorName: string;
+  hours: number;
+  amount: number;
+  // True when this line is the payee's own work rather than someone paid
+  // under their name.
+  isOwnWork: boolean;
+  periodLabel: string;
+}
+
+export interface PayrollPayment {
+  key: string;
+  payeeId: string;
+  payeeName: string;
+  payDate: string;
+  payDateSort: string;
+  total: number;
+  totalHours: number;
+  lines: PayrollLine[];
+}
+
+// The accounting view: one row per cheque actually sent. Work done by someone
+// paid under another person's name is folded into that person's payment, but
+// stays itemized so the total can be traced back to whose hours it was.
+export async function getPayrollByPayee(year: number): Promise<PayrollPayment[]> {
+  await requireUser();
+  const periods = await prisma.payPeriod.findMany({
+    where: { year },
+    include: {
+      contractor: {
+        select: {
+          id: true,
+          name: true,
+          paidTo: { select: { id: true, name: true } },
+        },
+      },
+    },
+    orderBy: [{ processingDate: "desc" }, { contractor: { name: "asc" } }],
+  });
+
+  const dateOpts: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
+  const payments = new Map<string, PayrollPayment>();
+
+  for (const p of periods) {
+    const payee = p.contractor.paidTo ?? p.contractor;
+    // ISO prefix keeps same-day payments grouped regardless of local formatting
+    const daySort = p.processingDate.toISOString().slice(0, 10);
+    const key = `${payee.id}|${daySort}`;
+
+    let payment = payments.get(key);
+    if (!payment) {
+      payment = {
+        key,
+        payeeId: payee.id,
+        payeeName: payee.name,
+        payDate: localDate(p.processingDate, dateOpts),
+        payDateSort: daySort,
+        total: 0,
+        totalHours: 0,
+        lines: [],
+      };
+      payments.set(key, payment);
+    }
+
+    payment.total += p.totalAmount;
+    payment.totalHours += p.totalHours;
+    payment.lines.push({
+      payPeriodId: p.id,
+      contractorName: p.contractor.name,
+      hours: p.totalHours,
+      amount: p.totalAmount,
+      isOwnWork: p.contractor.id === payee.id,
+      periodLabel: `${localDate(p.startDate, { month: "short", day: "numeric" })} — ${localDate(p.endDate, { month: "short", day: "numeric" })}`,
+    });
+  }
+
+  const result = [...payments.values()];
+  for (const payment of result) {
+    // The payee's own work first, then everyone paid under their name.
+    payment.lines.sort((a, b) => {
+      if (a.isOwnWork !== b.isOwnWork) return a.isOwnWork ? -1 : 1;
+      return a.contractorName.localeCompare(b.contractorName);
+    });
+  }
+  result.sort((a, b) => {
+    if (a.payDateSort !== b.payDateSort)
+      return b.payDateSort.localeCompare(a.payDateSort);
+    return a.payeeName.localeCompare(b.payeeName);
+  });
+
+  return result;
 }
 
 export interface SheetImportResult {

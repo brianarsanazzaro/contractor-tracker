@@ -28,12 +28,31 @@ model Contractor {
   startDate        String?
   terminationDate  String?
   paymentMethod    String    @default("Biweekly direct pay")
+
+  // Contact + account details. workPassword is stored as plain text because it
+  // has to be readable back; the database file is the security boundary.
+  personalEmail    String?
+  workEmail        String?
+  workPassword     String?
+  hasCompanyCard   Boolean   @default(false)
+  companyCardNote  String?   // Last 4, issue date, or anything worth noting
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+
+  // Some contractors are paid under someone else's name — their hours and rate
+  // stay on their own record, but the money is sent to the payee. Null means
+  // they are paid directly under their own name.
+  paidToId        String?
+  paidToStartDate String? // "YYYY-MM-DD" — when this arrangement began
+  paidToNote      String? // Why, or anything accounting needs to know
+  paidTo          Contractor?  @relation("Payee", fields: [paidToId], references: [id])
+  paidFor         Contractor[] @relation("Payee")
 
   payPeriods    PayPeriod[]
   payHistory    PayHistory[]
   accountAccess AccountAccess[]
+
+  @@index([paidToId])
 }
 
 model SharedAccount {

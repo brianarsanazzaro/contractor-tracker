@@ -29,9 +29,23 @@ export function parseClockifyCsv(
   const projectIdx = header.findIndex((h) => h.toLowerCase() === "project");
   const clientIdx = header.findIndex((h) => h.toLowerCase() === "client");
   const descIdx = header.findIndex((h) => h.toLowerCase() === "description");
-  const timeHIdx = header.findIndex((h) => h.toLowerCase().includes("time (h)"));
-  const timeDecIdx = header.findIndex((h) => h.toLowerCase().includes("time (decimal)"));
+  // Summary exports call these "Time (h)" / "Time (decimal)"; detailed exports
+  // call them "Duration (h)" / "Duration (decimal)". Accept both.
+  const timeHIdx = header.findIndex(
+    (h) => h.toLowerCase().includes("time (h)") || h.toLowerCase().includes("duration (h)")
+  );
+  const timeDecIdx = header.findIndex(
+    (h) =>
+      h.toLowerCase().includes("time (decimal)") ||
+      h.toLowerCase().includes("duration (decimal)")
+  );
   const amountIdx = header.findIndex((h) => h.toLowerCase().includes("amount"));
+
+  if (timeDecIdx === -1) {
+    throw new Error(
+      'Could not find a "Time (decimal)" or "Duration (decimal)" column in the CSV.'
+    );
+  }
 
   const rows: ClockifyRow[] = [];
   let totalHours = 0;

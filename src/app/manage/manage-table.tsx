@@ -6,6 +6,7 @@ import { bulkDeletePayPeriods } from "../actions";
 interface Period {
   id: string;
   contractorName: string;
+  paidToName: string | null;
   startDate: string;
   endDate: string;
   processingDate: string;
@@ -197,6 +198,11 @@ export function ManageTable({ periods }: { periods: Period[] }) {
                 </td>
                 <td className="px-3 py-2 font-medium text-gray-900">
                   {p.contractorName}
+                  {p.paidToName && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-xs font-normal">
+                      &rarr; {p.paidToName}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-gray-600">
                   {p.startDate} — {p.endDate}

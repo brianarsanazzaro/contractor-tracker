@@ -59,6 +59,15 @@ export default async function LoginPage({
           </svg>
           Sign in with Google
         </a>
+
+        {process.env.NODE_ENV !== "production" && (
+          <a
+            href="/api/auth/dev-signin"
+            className="mt-3 w-full flex items-center justify-center rounded border border-dashed border-gray-300 px-4 py-2 text-sm text-gray-500 hover:bg-gray-50"
+          >
+            Skip Google (local dev only)
+          </a>
+        )}
       </div>
     </div>
   );

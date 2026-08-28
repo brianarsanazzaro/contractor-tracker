@@ -12,6 +12,12 @@ const PUBLIC_PATHS = [
   "/api/auth/callback",
 ];
 
+// The local sign-in shortcut. The route itself 404s in production; this keeps
+// the public-path list matching it either way.
+if (process.env.NODE_ENV !== "production") {
+  PUBLIC_PATHS.push("/api/auth/dev-signin");
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PATHS.some(
